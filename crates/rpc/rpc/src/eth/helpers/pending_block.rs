@@ -1,10 +1,12 @@
 //! Support for building a pending block with transactions from local view of mempool.
 
+use crate::EthApi;
 use alloy_consensus::BlockHeader;
 use reth_chainspec::{ChainSpecProvider, EthChainSpec, EthereumHardforks};
 use reth_evm::{ConfigureEvm, NextBlockEnvAttributes};
 use reth_node_api::NodePrimitives;
 use reth_primitives_traits::SealedHeader;
+use reth_rpc_convert::RpcConvert;
 use reth_rpc_eth_api::{
     helpers::{LoadPendingBlock, SpawnBlocking},
     types::RpcTypes,
@@ -18,28 +20,23 @@ use reth_storage_api::{
 use reth_transaction_pool::{PoolTransaction, TransactionPool};
 use revm_primitives::B256;
 
-use crate::EthApi;
-
-impl<Provider, Pool, Network, EvmConfig> LoadPendingBlock
-    for EthApi<Provider, Pool, Network, EvmConfig>
+impl<Provider, Pool, Network, EvmConfig, Rpc> LoadPendingBlock
+    for EthApi<Provider, Pool, Network, EvmConfig, Rpc>
 where
     Self: SpawnBlocking<
-            NetworkTypes: RpcTypes<Header = alloy_rpc_types_eth::Header>,
+            NetworkTypes = Rpc,
             Error: FromEvmError<Self::Evm>,
+            RpcConvert: RpcConvert<Network = Rpc>,
         > + RpcNodeCore<
-            Provider: BlockReaderIdExt<
-                Transaction = reth_ethereum_primitives::TransactionSigned,
-                Block = reth_ethereum_primitives::Block,
-                Receipt = reth_ethereum_primitives::Receipt,
-                Header = alloy_consensus::Header,
-            > + ChainSpecProvider<ChainSpec: EthChainSpec + EthereumHardforks>
+            Provider: BlockReaderIdExt<Receipt = Provider::Receipt, Block = Provider::Block>
+                          + ChainSpecProvider<ChainSpec: EthChainSpec + EthereumHardforks>
                           + StateProviderFactory,
             Pool: TransactionPool<
                 Transaction: PoolTransaction<Consensus = ProviderTx<Self::Provider>>,
             >,
             Evm: ConfigureEvm<
                 Primitives = <Self as RpcNodeCore>::Primitives,
-                NextBlockEnvCtx = NextBlockEnvAttributes,
+                NextBlockEnvCtx: From<NextBlockEnvAttributes>,
             >,
             Primitives: NodePrimitives<
                 BlockHeader = ProviderHeader<Self::Provider>,
@@ -48,10 +45,8 @@ where
                 Block = ProviderBlock<Self::Provider>,
             >,
         >,
-    Provider: BlockReader<
-        Block = reth_ethereum_primitives::Block,
-        Receipt = reth_ethereum_primitives::Receipt,
-    >,
+    Provider: BlockReader,
+    Rpc: RpcTypes<Header = alloy_rpc_types_eth::Header<ProviderHeader<Self::Provider>>>,
 {
     #[inline]
     fn pending_block(
@@ -72,7 +67,8 @@ where
             prev_randao: B256::random(),
             gas_limit: parent.gas_limit(),
             parent_beacon_block_root: parent.parent_beacon_block_root().map(|_| B256::ZERO),
-            withdrawals: None,
-        })
+            withdrawals: parent.withdrawals_root().map(|_| Default::default()),
+        }
+        .into())
     }
 }
