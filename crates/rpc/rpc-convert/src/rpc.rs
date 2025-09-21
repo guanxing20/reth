@@ -1,10 +1,10 @@
 use std::{fmt::Debug, future::Future};
 
-use alloy_consensus::{
-    EthereumTxEnvelope, EthereumTypedTransaction, SignableTransaction, TxEip4844,
-};
+use alloy_consensus::{EthereumTxEnvelope, SignableTransaction, TxEip4844};
 use alloy_json_rpc::RpcObject;
-use alloy_network::{Network, ReceiptResponse, TransactionResponse, TxSigner};
+use alloy_network::{
+    primitives::HeaderResponse, Network, ReceiptResponse, TransactionResponse, TxSigner,
+};
 use alloy_primitives::Signature;
 use alloy_rpc_types_eth::TransactionRequest;
 
@@ -13,7 +13,7 @@ use alloy_rpc_types_eth::TransactionRequest;
 /// This is a subset of [`Network`] trait with only RPC response types kept.
 pub trait RpcTypes: Send + Sync + Clone + Unpin + Debug + 'static {
     /// Header response type.
-    type Header: RpcObject;
+    type Header: RpcObject + HeaderResponse;
     /// Receipt response type.
     type Receipt: RpcObject + ReceiptResponse;
     /// Transaction response type.
@@ -34,6 +34,15 @@ where
 
 /// Adapter for network specific transaction response.
 pub type RpcTransaction<T> = <T as RpcTypes>::TransactionResponse;
+
+/// Adapter for network specific receipt response.
+pub type RpcReceipt<T> = <T as RpcTypes>::Receipt;
+
+/// Adapter for network specific header response.
+pub type RpcHeader<T> = <T as RpcTypes>::Header;
+
+/// Adapter for network specific block type.
+pub type RpcBlock<T> = alloy_rpc_types_eth::Block<RpcTransaction<T>, RpcHeader<T>>;
 
 /// Adapter for network specific transaction request.
 pub type RpcTxReq<T> = <T as RpcTypes>::TransactionRequest;
@@ -67,24 +76,7 @@ impl SignableTxRequest<EthereumTxEnvelope<TxEip4844>> for TransactionRequest {
         let mut tx =
             self.build_typed_tx().map_err(|_| SignTxRequestError::InvalidTransactionRequest)?;
         let signature = signer.sign_transaction(&mut tx).await?;
-        let signed = match tx {
-            EthereumTypedTransaction::Legacy(tx) => {
-                EthereumTxEnvelope::Legacy(tx.into_signed(signature))
-            }
-            EthereumTypedTransaction::Eip2930(tx) => {
-                EthereumTxEnvelope::Eip2930(tx.into_signed(signature))
-            }
-            EthereumTypedTransaction::Eip1559(tx) => {
-                EthereumTxEnvelope::Eip1559(tx.into_signed(signature))
-            }
-            EthereumTypedTransaction::Eip4844(tx) => {
-                EthereumTxEnvelope::Eip4844(TxEip4844::from(tx).into_signed(signature))
-            }
-            EthereumTypedTransaction::Eip7702(tx) => {
-                EthereumTxEnvelope::Eip7702(tx.into_signed(signature))
-            }
-        };
-        Ok(signed)
+        Ok(tx.into_signed(signature).into())
     }
 }
 
@@ -99,23 +91,12 @@ impl SignableTxRequest<op_alloy_consensus::OpTxEnvelope>
         let mut tx =
             self.build_typed_tx().map_err(|_| SignTxRequestError::InvalidTransactionRequest)?;
         let signature = signer.sign_transaction(&mut tx).await?;
-        let signed = match tx {
-            op_alloy_consensus::OpTypedTransaction::Legacy(tx) => {
-                op_alloy_consensus::OpTxEnvelope::Legacy(tx.into_signed(signature))
-            }
-            op_alloy_consensus::OpTypedTransaction::Eip2930(tx) => {
-                op_alloy_consensus::OpTxEnvelope::Eip2930(tx.into_signed(signature))
-            }
-            op_alloy_consensus::OpTypedTransaction::Eip1559(tx) => {
-                op_alloy_consensus::OpTxEnvelope::Eip1559(tx.into_signed(signature))
-            }
-            op_alloy_consensus::OpTypedTransaction::Eip7702(tx) => {
-                op_alloy_consensus::OpTxEnvelope::Eip7702(tx.into_signed(signature))
-            }
-            op_alloy_consensus::OpTypedTransaction::Deposit(_) => {
-                return Err(SignTxRequestError::InvalidTransactionRequest);
-            }
-        };
-        Ok(signed)
+
+        // sanity check
+        if tx.is_deposit() {
+            return Err(SignTxRequestError::InvalidTransactionRequest);
+        }
+
+        Ok(tx.into_signed(signature).into())
     }
 }

@@ -40,6 +40,7 @@ exclude_crates=(
   reth-node-events
   reth-node-metrics
   reth-optimism-cli
+  reth-optimism-flashblocks
   reth-optimism-node
   reth-optimism-payload-builder
   reth-optimism-rpc
@@ -60,7 +61,7 @@ exclude_crates=(
   reth-ress-provider
   # The following are not supposed to be working
   reth # all of the crates below
-  reth-alloy-provider
+  reth-storage-rpc-provider
   reth-invalid-block-hooks # reth-provider
   reth-libmdbx # mdbx
   reth-mdbx-sys # mdbx

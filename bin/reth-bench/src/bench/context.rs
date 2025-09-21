@@ -36,10 +36,15 @@ impl BenchContext {
     pub(crate) async fn new(bench_args: &BenchmarkArgs, rpc_url: String) -> eyre::Result<Self> {
         info!("Running benchmark using data from RPC URL: {}", rpc_url);
 
-        // Ensure that output directory is a directory
+        // Ensure that output directory exists and is a directory
         if let Some(output) = &bench_args.output {
             if output.is_file() {
                 return Err(eyre::eyre!("Output path must be a directory"));
+            }
+            // Create the directory if it doesn't exist
+            if !output.exists() {
+                std::fs::create_dir_all(output)?;
+                info!("Created output directory: {:?}", output);
             }
         }
 
@@ -53,15 +58,11 @@ impl BenchContext {
             .await?
             .is_empty();
 
-        // If neither `--from` nor `--to` are provided, we will run the benchmark continuously,
-        // starting at the latest block.
-        let mut benchmark_mode = BenchMode::new(bench_args.from, bench_args.to)?;
-
         // construct the authenticated provider
         let auth_jwt = bench_args
             .auth_jwtsecret
             .clone()
-            .ok_or_else(|| eyre::eyre!("--jwtsecret must be provided for authenticated RPC"))?;
+            .ok_or_else(|| eyre::eyre!("--jwt-secret must be provided for authenticated RPC"))?;
 
         // fetch jwt from file
         //
@@ -77,6 +78,31 @@ impl BenchContext {
         let auth_transport = AuthenticatedTransportConnect::new(auth_url, jwt);
         let client = ClientBuilder::default().connect_with(auth_transport).await?;
         let auth_provider = RootProvider::<AnyNetwork>::new(client);
+
+        // Computes the block range for the benchmark.
+        //
+        // - If `--advance` is provided, fetches the latest block and sets:
+        //     - `from = head + 1`
+        //     - `to = head + advance`
+        // - Otherwise, uses the values from `--from` and `--to`.
+        let (from, to) = if let Some(advance) = bench_args.advance {
+            if advance == 0 {
+                return Err(eyre::eyre!("--advance must be greater than 0"));
+            }
+
+            let head_block = auth_provider
+                .get_block_by_number(BlockNumberOrTag::Latest)
+                .await?
+                .ok_or_else(|| eyre::eyre!("Failed to fetch latest block for --advance"))?;
+            let head_number = head_block.header.number;
+            (Some(head_number), Some(head_number + advance))
+        } else {
+            (bench_args.from, bench_args.to)
+        };
+
+        // If neither `--from` nor `--to` are provided, we will run the benchmark continuously,
+        // starting at the latest block.
+        let mut benchmark_mode = BenchMode::new(from, to)?;
 
         let first_block = match benchmark_mode {
             BenchMode::Continuous => {
